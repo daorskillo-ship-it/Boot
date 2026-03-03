@@ -1,0 +1,5 @@
+{
+  "name": "Paradice Roulette Bot",
+  "description": "An automated crypto roulette bot for paradice.in using the Labouchere strategy with dynamic strategy rotation.",
+  "requestFramePermissions": []
+}
