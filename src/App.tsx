@@ -1,19 +1,22 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useEffect, useRef } from 'react';
+import { io, Socket } from 'socket.io-client';
 import { 
   Play, 
   Square, 
-  RotateCcw, 
+  Settings, 
+  BarChart3, 
+  Terminal, 
+  Wallet, 
   TrendingUp, 
-  TrendingDown, 
-  Activity, 
-  Settings,
-  History,
-  Coins,
-  ShieldAlert,
   Brain,
-  Zap,
-  LineChart as ChartIcon
+  Bell,
+  ChevronRight,
+  ShieldAlert,
+  Moon,
+  Sun,
+  Activity,
+  History,
+  Target
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -22,930 +25,698 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ResponsiveContainer,
-  AreaChart,
-  Area
+  ResponsiveContainer 
 } from 'recharts';
-import { LabouchereState } from './types';
+
+const HARDCODED_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJwYXJhZGljZS5pbiIsImF1ZCI6InBhcmFkaWNlLmluIiwiaWF0IjoxNzcwODA1NjgyLCJuYmYiOjE3NzA4MDU2ODIsImRhdGEiOnsiaWQiOiIyODI5MyIsImxvZ2luIjoiZGFvcmN6Iiwia2V5IjoiUGhhbkFUYTZDRW9MaFNoRFVtZ0ZoUzNiYnhiYk43ZWsifX0.Dj20XVI1ILfEhVsoVCuT1YOWrU9GKX0NFpnb4a5dhNIZlKmQNsBZASyqXRMGNNEqoBQxfraBEdA6ejqHXID7fbHhKcopn8arD4R3RppISp-7xq5L_MhmPs9Z1NHqR-7byV4ejQge1VfcDL4GnSW0sGMdSJYs3Tv_RkfsR3xAe4gfar0ExfMT9vGdPypVlQUIbjK0BRFAiJtM-tBN5pd8HMQ383qH7gWhYDj_Fhtz6H6GoyQhgiCWXE-xw6Yw--mw0qQWxJeAFC1uVgSozNiWA5HRXdN3lpmBcWjJDjNA63H33FSESSVEVuAGBv1ycFxczFvB5glihnw9TvYcj7tfdg";
+
+interface LogEntry {
+  msg: string;
+  color: string;
+  time: string;
+}
+
+interface BotStatus {
+  running: boolean;
+  balance: number;
+  profit: number;
+  activeStrat: string;
+  historyCount: number;
+  chartData: { time: string; profit: number; sma?: number }[];
+  stats?: {
+    winRate: string;
+    currentStreak: number;
+    maxStreak: number;
+    maxDrawdown: string;
+    totalBets: number;
+  };
+  aiWeights?: Record<string, number>;
+  aiConfidence?: number;
+  aiSectorBias?: string;
+  marketPhase?: string;
+  marketVolatility?: number;
+  betHistory?: BetRecord[];
+}
+
+interface BetRecord {
+  id: number;
+  time: string;
+  strat: string;
+  bet: number;
+  outcome: "WIN" | "LOSS";
+  profit: number;
+  roll: number;
+}
+
+interface LiveConsoleProps {
+  logs: LogEntry[];
+}
+
+interface BetHistoryTableProps {
+  betHistory: BetRecord[];
+}
+
+const BetHistoryTable = React.memo(({ betHistory }: BetHistoryTableProps) => {
+  return (
+    <div className="bg-white dark:bg-[#1e293b] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden transition-colors duration-200">
+      <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 flex items-center gap-2 transition-colors duration-200">
+        <History className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+        <h2 className="font-semibold text-sm uppercase tracking-wider text-slate-800 dark:text-slate-200">Bet History</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left">
+          <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
+            <tr>
+              <th className="px-4 py-3 font-medium">#</th>
+              <th className="px-4 py-3 font-medium">Time</th>
+              <th className="px-4 py-3 font-medium">Strat</th>
+              <th className="px-4 py-3 font-medium">Roll</th>
+              <th className="px-4 py-3 font-medium">Bet</th>
+              <th className="px-4 py-3 font-medium">Outcome</th>
+              <th className="px-4 py-3 font-medium text-right">Profit</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            {(betHistory || []).map((bet) => (
+              <tr key={bet.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                <td className="px-4 py-3 font-mono text-slate-500 dark:text-slate-400">{bet.id}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{bet.time}</td>
+                <td className="px-4 py-3">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                    {bet.strat}
+                  </span>
+                </td>
+                <td className="px-4 py-3 font-mono font-bold text-slate-700 dark:text-slate-200">{bet.roll}</td>
+                <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300">{bet.bet.toFixed(8)}</td>
+                <td className="px-4 py-3">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    bet.outcome === 'WIN' 
+                      ? 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20' 
+                      : 'bg-rose-100 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20'
+                  }`}>
+                    {bet.outcome}
+                  </span>
+                </td>
+                <td className={`px-4 py-3 font-mono font-bold text-right ${bet.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {bet.profit >= 0 ? '+' : ''}{bet.profit.toFixed(8)}
+                </td>
+              </tr>
+            ))}
+            {(betHistory || []).length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400 dark:text-slate-600 text-xs uppercase tracking-widest">
+                  No bets placed yet
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+});
+
+interface ProfitChartProps {
+  chartData: { time: string; profit: number; sma?: number }[];
+  isDarkMode: boolean;
+  running: boolean;
+  showSMA: boolean;
+  setShowSMA: (show: boolean) => void;
+}
+
+const ProfitChart = React.memo(({ chartData, isDarkMode, running, showSMA, setShowSMA }: ProfitChartProps) => {
+  return (
+    <div className="bg-white dark:bg-[#1e293b] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden transition-colors duration-200">
+      <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 flex items-center justify-between transition-colors duration-200">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          <h2 className="font-semibold text-sm uppercase tracking-wider italic font-serif text-slate-800 dark:text-slate-200">Profit Performance</h2>
+        </div>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={showSMA}
+              onChange={(e) => setShowSMA(e.target.checked)}
+              className="w-3 h-3 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-amber-500 focus:ring-amber-500"
+            />
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Show SMA (10)</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${running ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400 dark:bg-slate-600'}`}></div>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{running ? 'Live' : 'Offline'}</span>
+          </div>
+        </div>
+      </div>
+      <div className="p-6 h-[400px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? "#334155" : "#e2e8f0"} vertical={false} />
+            <XAxis 
+              dataKey="time" 
+              stroke={isDarkMode ? "#64748b" : "#94a3b8"} 
+              fontSize={10} 
+              tickLine={false} 
+              axisLine={false}
+              minTickGap={30}
+            />
+            <YAxis 
+              stroke={isDarkMode ? "#64748b" : "#94a3b8"} 
+              fontSize={10} 
+              tickLine={false} 
+              axisLine={false}
+              tickFormatter={(val) => val.toFixed(4)}
+            />
+            <Tooltip 
+              contentStyle={{ backgroundColor: isDarkMode ? '#1e293b' : '#ffffff', border: isDarkMode ? '1px solid #334155' : '1px solid #e2e8f0', borderRadius: '8px' }}
+              itemStyle={{ color: '#818cf8', fontWeight: 'bold' }}
+              labelStyle={{ color: '#94a3b8', fontSize: '10px' }}
+            />
+            <Line 
+              type="monotone" 
+              dataKey="profit" 
+              stroke="#6366f1" 
+              strokeWidth={3} 
+              dot={false}
+              isAnimationActive={false}
+            />
+            {showSMA && (
+              <Line 
+                type="monotone" 
+                dataKey="sma" 
+                stroke="#f59e0b" 
+                strokeWidth={2} 
+                strokeDasharray="5 5"
+                dot={false}
+                isAnimationActive={false}
+              />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+});
+
+const LiveConsole = React.memo(({ logs }: LiveConsoleProps) => {
+  const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = logContainerRef.current;
+    if (container) {
+      const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
+      if (isAtBottom) {
+        logEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    }
+  }, [logs]);
+
+  return (
+    <div className="bg-white dark:bg-[#1e293b] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden flex flex-col h-[400px] transition-colors duration-200">
+      <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 flex items-center gap-2 transition-colors duration-200">
+        <Terminal className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+        <h2 className="font-semibold text-sm uppercase tracking-wider text-slate-800 dark:text-slate-200">Live Console</h2>
+      </div>
+      <div ref={logContainerRef} className="flex-1 p-4 font-mono text-xs overflow-y-auto custom-scrollbar bg-slate-50 dark:bg-slate-950/50 transition-colors duration-200">
+        {logs.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-slate-400 dark:text-slate-600 gap-2">
+            <Terminal className="w-8 h-8 opacity-20" />
+            <p className="uppercase tracking-widest text-[10px] font-bold">Waiting for bot activity...</p>
+          </div>
+        )}
+        {logs.map((log, i) => (
+          <div key={i} className="flex gap-3 py-0.5 group">
+            <span className="text-slate-400 dark:text-slate-600 shrink-0">[{log.time}]</span>
+            <span style={{ color: log.color }} className="break-all">{log.msg}</span>
+          </div>
+        ))}
+        <div ref={logEndRef} />
+      </div>
+    </div>
+  );
+});
 
 export default function App() {
-  const [state, setState] = useState<LabouchereState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [inputSequence, setInputSequence] = useState('1, 2, 3');
-  const [selectedCurrency, setSelectedCurrency] = useState('BTC');
-  const [selectedBetType, setSelectedBetType] = useState('even_money');
-  const [strategyMode, setStrategyMode] = useState<'manual' | 'ai'>('ai');
-  const [apiToken, setApiToken] = useState('');
-  const [baseBet, setBaseBet] = useState('1');
-  const [stopLoss, setStopLoss] = useState('0');
-  const [takeProfit, setTakeProfit] = useState('0');
-  const [balance, setBalance] = useState('1000');
-  const [hasInitialized, setHasInitialized] = useState(false);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showSMA, setShowSMA] = useState(true);
+  const [status, setStatus] = useState<BotStatus>({
+    running: false,
+    balance: 0,
+    profit: 0,
+    activeStrat: '---',
+    historyCount: 0,
+    chartData: [{ time: '', profit: 0 }]
+  });
 
-  const betTypeConfigs: Record<string, { payout: number, count: number, label: string }> = {
-    'even_money': { payout: 1, count: 1, label: 'Even Money (1:1)' },
-    'dozens': { payout: 2, count: 2, label: 'Dozens (2:1)' },
-    'columns': { payout: 2, count: 2, label: 'Columns (2:1)' },
-    'six_line': { payout: 5, count: 5, label: 'Six Line (5:1)' },
-    'corner': { payout: 8, count: 8, label: 'Corner (8:1)' },
-    'street': { payout: 11, count: 11, label: 'Street (11:1)' },
-    'split': { payout: 17, count: 17, label: 'Split (17:1)' },
-    'straight_up': { payout: 35, count: 35, label: 'Straight Up (35:1)' },
-  };
+  const [config, setConfig] = useState({
+    token: HARDCODED_TOKEN,
+    currency: 'USDT_BEP',
+    tgToken: '',
+    tgChat: '',
+    playA: true,
+    playB: false,
+    playC: true,
+    playD: false,
+    playE: false,
+    playF: false,
+    playG: true,
+    betA: '0.00000001',
+    betB: '0.00000001',
+    betC: '0.00000001',
+    betD: '0.00000001',
+    betE: '0.00000001',
+    betF: '0.00000001',
+    betG: '0.00000001',
+    rescueLimit: '25',
+    stopLoss: '10.0',
+    takeProfit: '0.0',
+    seedInterval: 1,
+    aiMode: true,
+    riskTolerance: 'MEDIUM'
+  });
 
-  const fetchState = async () => {
-    try {
-      const res = await fetch('/api/state');
-      
-      if (!res.ok) {
-        throw new Error(`Server error: ${res.status}`);
-      }
-
-      const text = await res.text();
-      
-      try {
-        const data = JSON.parse(text);
-        setState(data);
-        setError(null);
-      } catch (parseErr) {
-        // If the response is not JSON (e.g. HTML error page during restart), ignore it
-        console.warn('Received invalid JSON from server (likely restarting)');
-      }
-    } catch (err) {
-      console.error('Failed to fetch state:', err);
-      setError('Connection lost. Retrying...');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isDarkMode, setIsDarkMode] = useState(true);
 
   useEffect(() => {
-    fetchState();
-    const interval = setInterval(fetchState, 1000);
-    return () => clearInterval(interval);
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  useEffect(() => {
+    const newSocket = io();
+    setSocket(newSocket);
+
+    newSocket.on('bot:init', (data) => {
+      setRunning(data.running);
+      setStatus(prev => ({ ...prev, ...data }));
+      if (data.logs) setLogs(data.logs);
+      setIsLoaded(true);
+    });
+    newSocket.on('bot:status', (data) => setRunning(data.running));
+    newSocket.on('bot:log', (log) => setLogs(prev => [...prev.slice(-499), log]));
+    newSocket.on('bot:update', (data) => setStatus(prev => ({ ...prev, ...data })));
+
+    return () => {
+      newSocket.close();
+    };
   }, []);
 
-  useEffect(() => {
-    if (state && !hasInitialized) {
-      setInputSequence(state.initialSequence.join(', '));
-      setSelectedCurrency(state.currency);
-      setBaseBet(state.baseBet.toString());
-      setStopLoss(state.stopLoss.toString());
-      setTakeProfit(state.takeProfit.toString());
-      setBalance(state.balance.toString());
-      setApiToken(state.apiToken);
-      setStrategyMode(state.strategyMode);
-      setHasInitialized(true);
-    }
-  }, [state, hasInitialized]);
-
-  useEffect(() => {
-    if (success || error) {
-      const timer = setTimeout(() => {
-        setSuccess(null);
-        if (error !== 'Connection lost. Retrying...') setError(null);
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [success, error]);
-
   const handleStart = async () => {
+    const activeStrats = [];
+    if (config.playA) activeStrats.push('A');
+    if (config.playB) activeStrats.push('B');
+    if (config.playC) activeStrats.push('C');
+    if (config.playD) activeStrats.push('D');
+    if (config.playE) activeStrats.push('E');
+    if (config.playF) activeStrats.push('F');
+    if (config.playG) activeStrats.push('G');
+
+    const payload = {
+      ...config,
+      activeStrats,
+      aiMode: config.aiMode,
+      rescueLimit: parseInt(config.rescueLimit) || 0,
+      stopLoss: parseFloat(config.stopLoss) || 0,
+      takeProfit: parseFloat(config.takeProfit) || 0,
+      bets: {
+        A: parseFloat(config.betA) || 0,
+        B: parseFloat(config.betB) || 0,
+        C: parseFloat(config.betC) || 0,
+        D: parseFloat(config.betD) || 0,
+        E: parseFloat(config.betE) || 0,
+        F: parseFloat(config.betF) || 0,
+        G: parseFloat(config.betG) || 0
+      }
+    };
+
     try {
-      await fetch('/api/start', { method: 'POST' });
-      fetchState();
-    } catch (err) {
-      setError('Failed to start bot');
+      const res = await fetch('/api/bot/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        setRunning(true);
+        setLogs([]);
+      } else {
+        const err = await res.json();
+        alert(`Error: ${err.error || 'Failed to start bot'}`);
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert(`Network Error: ${e.message}`);
     }
   };
 
   const handleStop = async () => {
     try {
-      await fetch('/api/stop', { method: 'POST' });
-      fetchState();
-    } catch (err) {
-      setError('Failed to stop bot');
+      await fetch('/api/bot/stop', { method: 'POST' });
+      setRunning(false);
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const handleReset = async () => {
-    if (window.confirm('Are you sure you want to reset all stats and sequence?')) {
-      try {
-        await fetch('/api/reset', { method: 'POST' });
-        fetchState();
-      } catch (err) {
-        setError('Failed to reset bot');
-      }
-    }
-  };
-
-  const handleUpdateConfig = async () => {
-    try {
-      const sequence = inputSequence.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-      if (sequence.length === 0) {
-        setError('Invalid sequence format');
-        return;
-      }
-      
-      const config = betTypeConfigs[selectedBetType];
-      
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          sequence, 
-          currency: selectedCurrency,
-          targetPayout: config.payout,
-          targetCount: config.count,
-          strategyMode,
-          apiToken,
-          baseBet: parseFloat(baseBet) || 1,
-          stopLoss: parseFloat(stopLoss) || 0,
-          takeProfit: parseFloat(takeProfit) || 0,
-          betMultiplier: state?.currentMultiplier || 1,
-          balance: parseFloat(balance) || 1000
-        })
-      });
-      
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Failed to update config');
-        return;
-      }
-      
-      setSuccess('Configuration saved successfully!');
-      fetchState();
-    } catch (err) {
-      setError('Failed to update configuration');
-    }
-  };
-
-  if (loading && !state) {
+  if (!isLoaded) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Activity className="w-12 h-12 text-emerald-500 animate-pulse" />
-          <p className="text-emerald-500/60 font-mono text-sm uppercase tracking-widest">Initializing System...</p>
-        </div>
+      <div className="min-h-screen bg-slate-50 dark:bg-[#0f172a] flex flex-col items-center justify-center gap-4">
+        <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs animate-pulse">Connecting to Trinity Engine...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 font-sans selection:bg-emerald-500/30">
-      {/* Header */}
-      <header className="border-b border-white/5 bg-black/20 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-              <Activity className="w-5 h-5 text-black" />
-            </div>
-            <h1 className="text-lg font-semibold tracking-tight">Paradice <span className="text-emerald-500">Bot</span></h1>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            {error && (
-              <div className="flex items-center gap-2 text-rose-500 text-xs font-medium bg-rose-500/10 px-3 py-1.5 rounded-full border border-rose-500/20">
-                <ShieldAlert className="w-3.5 h-3.5" />
-                {error}
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0f172a] text-slate-900 dark:text-slate-200 font-sans selection:bg-indigo-500/30 transition-colors duration-200">
+      <div className="max-w-[1600px] mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Sidebar - Configuration */}
+        <div className="lg:col-span-3 space-y-6">
+          <div className="bg-white dark:bg-[#1e293b] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden transition-colors duration-200">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 flex items-center justify-between transition-colors duration-200">
+              <div className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <h2 className="font-semibold text-sm uppercase tracking-wider text-slate-800 dark:text-slate-200">Configuration</h2>
               </div>
-            )}
-            {success && (
-              <div className="flex items-center gap-2 text-emerald-500 text-xs font-medium bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">
-                <Zap className="w-3.5 h-3.5" />
-                {success}
-              </div>
-            )}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium ${
-              state?.isRunning 
-                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
-                : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
-            }`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${state?.isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}`} />
-              {state?.isRunning ? 'SYSTEM ACTIVE' : 'SYSTEM STANDBY'}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Column: Controls & Stats */}
-        <div className="lg:col-span-4 space-y-6">
-          {/* Main Controls */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-                <Settings className="w-4 h-4" />
-                Control Center
-              </h2>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3">
-              {!state?.isRunning ? (
-                <button
-                  onClick={handleStart}
-                  className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-[0_0_30px_rgba(16,185,129,0.2)] active:scale-[0.98]"
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  START BOT
-                </button>
-              ) : (
-                <button
-                  onClick={handleStop}
-                  className="w-full py-4 bg-rose-500 hover:bg-rose-400 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-[0_0_30px_rgba(244,63,94,0.2)] active:scale-[0.98]"
-                >
-                  <Square className="w-5 h-5 fill-current" />
-                  STOP BOT
-                </button>
-              )}
-              
-              <button
-                onClick={handleReset}
-                className="w-full py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-medium rounded-xl transition-all flex items-center justify-center gap-2 border border-white/5 active:scale-[0.98]"
+              <button 
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className="p-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                title="Toggle Theme"
               >
-                <RotateCcw className="w-4 h-4" />
-                RESET SESSION
+                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
             </div>
-          </section>
-
-          {/* Configuration */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-6">
-            <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              Bot Configuration
-            </h2>
             
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Paradice API Token</label>
-                <div className="relative">
-                  <input 
-                    type="password" 
-                    value={apiToken}
-                    onChange={(e) => setApiToken(e.target.value)}
-                    disabled={state?.isRunning}
-                    placeholder="Enter your API token..."
-                    className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed pr-10"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <div className={`w-2 h-2 rounded-full ${
-                      state?.apiStatus === 'connected' ? 'bg-emerald-500' :
-                      state?.apiStatus === 'error' ? 'bg-rose-500' : 'bg-zinc-600'
-                    }`} />
-                  </div>
-                </div>
-                <p className="text-[10px] text-zinc-500 italic px-1">
-                  {state?.apiStatus === 'connected' ? 'API Connected' : 
-                   state?.apiStatus === 'error' ? 'API Error: Check Token' : 'API Token Required'}
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Strategy Selection Mode</label>
-                <div className="grid grid-cols-2 gap-2 bg-black/40 p-1 rounded-xl border border-white/5">
-                  <button
-                    onClick={() => setStrategyMode('manual')}
-                    disabled={state?.isRunning}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all ${
-                      strategyMode === 'manual' 
-                        ? 'bg-zinc-800 text-white shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                  >
-                    MANUAL
-                  </button>
-                  <button
-                    onClick={() => setStrategyMode('ai')}
-                    disabled={state?.isRunning}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                      strategyMode === 'ai' 
-                        ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                  >
-                    <Brain className="w-3 h-3" />
-                    AI OPTIMIZED
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Initial Sequence</label>
+            <div className="p-4 space-y-4 max-h-[calc(100vh-250px)] overflow-y-auto custom-scrollbar">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Casino Token</label>
                 <input 
-                  type="text" 
-                  value={inputSequence}
-                  onChange={(e) => setInputSequence(e.target.value)}
-                  disabled={state?.isRunning}
-                  placeholder="e.g. 1, 2, 3"
-                  className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  type="password" 
+                  value={config.token}
+                  onChange={(e) => setConfig({...config, token: e.target.value})}
+                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-slate-200"
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Starting Balance</label>
-                <input 
-                  type="number" 
-                  step="0.00000001"
-                  value={balance}
-                  onChange={(e) => setBalance(e.target.value)}
-                  disabled={state?.isRunning}
-                  placeholder="e.g. 1000"
-                  className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Base Bet (Unit Value)</label>
-                <input 
-                  type="number" 
-                  step="0.00000001"
-                  value={baseBet}
-                  onChange={(e) => setBaseBet(e.target.value)}
-                  disabled={state?.isRunning}
-                  placeholder="e.g. 0.0001"
-                  className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Stop Loss</label>
-                  <input 
-                    type="number" 
-                    step="0.00000001"
-                    value={stopLoss}
-                    onChange={(e) => setStopLoss(e.target.value)}
-                    disabled={state?.isRunning}
-                    placeholder="0 for none"
-                    className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-rose-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Take Profit</label>
-                  <input 
-                    type="number" 
-                    step="0.00000001"
-                    value={takeProfit}
-                    onChange={(e) => setTakeProfit(e.target.value)}
-                    disabled={state?.isRunning}
-                    placeholder="0 for none"
-                    className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                </div>
-              </div>
-
-              {strategyMode === 'manual' && (
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Bet Type (Manual)</label>
-                  <select 
-                    value={selectedBetType}
-                    onChange={(e) => setSelectedBetType(e.target.value)}
-                    disabled={state?.isRunning}
-                    className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed appearance-none"
-                  >
-                    {Object.entries(betTypeConfigs).map(([key, cfg]) => (
-                      <option key={key} value={key}>{cfg.label}</option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-zinc-500 italic px-1">
-                    Covers {betTypeConfigs[selectedBetType].count} spots.
-                  </p>
-                </div>
-              )}
-
-              {strategyMode === 'ai' && (
-                <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-4">
-                  <p className="text-[10px] text-emerald-500/80 leading-relaxed font-medium">
-                    AI will automatically select the best Bet Type and Target after every successful progression.
-                  </p>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Currency</label>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Currency</label>
                 <select 
-                  value={selectedCurrency}
-                  onChange={(e) => setSelectedCurrency(e.target.value)}
-                  disabled={state?.isRunning}
-                  className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-sm font-mono focus:outline-none focus:border-emerald-500/50 disabled:opacity-50 disabled:cursor-not-allowed appearance-none"
+                  value={config.currency}
+                  onChange={(e) => setConfig({...config, currency: e.target.value})}
+                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-slate-200"
                 >
-                  <option value="BTC">BTC (Bitcoin)</option>
-                  <option value="ETH">ETH (Ethereum)</option>
-                  <option value="LTC">LTC (Litecoin)</option>
-                  <option value="DOGE">DOGE (Dogecoin)</option>
-                  <option value="TRX">TRX (Tron)</option>
-                  <option value="USDT">USDT (Tether)</option>
+                  {["USDT_BEP", "BNB", "DOGE", "LTC", "TRX", "PRDC", "POL"].map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
               </div>
 
-              <button
-                onClick={handleUpdateConfig}
-                disabled={state?.isRunning}
-                className="w-full py-3 bg-white/5 hover:bg-white/10 text-zinc-300 font-medium rounded-xl transition-all flex items-center justify-center gap-2 border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                APPLY CONFIGURATION
-              </button>
-            </div>
-          </section>
-
-          {/* Quick Stats */}
-          <section className="grid grid-cols-2 gap-4">
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-5 space-y-1">
-              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Profit</p>
-              <div className={`text-2xl font-mono font-bold ${state && state.totalProfit >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                {state?.totalProfit.toFixed(8)}
-              </div>
-            </div>
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-5 space-y-1">
-              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Win Rate</p>
-              <div className="text-2xl font-mono font-bold text-zinc-100">
-                {state && (state.wins + state.losses) > 0 
-                  ? ((state.wins / (state.wins + state.losses)) * 100).toFixed(1) 
-                  : '0.0'}%
-              </div>
-            </div>
-          </section>
-
-          {/* Detailed Stats */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-            <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-              <History className="w-4 h-4" />
-              Session Metrics
-            </h2>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Wins</span>
-                <span className="text-sm font-mono text-emerald-500">{state?.wins}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Losses</span>
-                <span className="text-sm font-mono text-rose-500">{state?.losses}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Current Streak</span>
-                <span className={`text-sm font-mono ${state && state.currentStreak > 0 ? 'text-emerald-500' : state && state.currentStreak < 0 ? 'text-rose-500' : 'text-zinc-500'}`}>
-                  {state && state.currentStreak > 0 ? `+${state.currentStreak}` : state?.currentStreak}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Max Win Streak</span>
-                <span className="text-sm font-mono text-emerald-500">{state?.maxWinStreak}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Max Loss Streak</span>
-                <span className="text-sm font-mono text-rose-500">{state?.maxLossStreak}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Current Strategy</span>
-                <span className="text-sm font-mono text-zinc-100 uppercase">{state?.currentStrategy}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Bet Mode</span>
-                <span className="text-sm font-mono text-zinc-100 uppercase">
-                  {state?.targetPayout}:1 (x{state?.targetCount})
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Selection Mode</span>
-                <span className={`text-sm font-mono uppercase ${state?.strategyMode === 'ai' ? 'text-emerald-500' : 'text-zinc-400'}`}>
-                  {state?.strategyMode}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">API Status</span>
-                <span className={`text-sm font-mono uppercase ${
-                  state?.apiStatus === 'connected' ? 'text-emerald-500' :
-                  state?.apiStatus === 'error' ? 'text-rose-500' : 'text-zinc-500'
-                }`}>
-                  {state?.apiStatus}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Currency</span>
-                <span className="text-sm font-mono text-zinc-100 uppercase">{state?.currency}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Base Bet</span>
-                <span className="text-sm font-mono text-zinc-100 uppercase">{state?.baseBet}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-white/5">
-                <span className="text-sm text-zinc-500">Stop Loss</span>
-                <span className="text-sm font-mono text-rose-500 uppercase">{state?.stopLoss > 0 ? `-${state.stopLoss}` : 'None'}</span>
-              </div>
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm text-zinc-500">Take Profit</span>
-                <span className="text-sm font-mono text-emerald-500 uppercase">{state?.takeProfit > 0 ? `+${state.takeProfit}` : 'None'}</span>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {/* Right Column: Labouchere Sequence & Visuals */}
-        <div className="lg:col-span-8 space-y-6">
-          {/* Sequence Visualizer */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-8 min-h-[300px] flex flex-col">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-                <Coins className="w-4 h-4" />
-                Labouchere Sequence
-              </h2>
-              <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                {state?.sequence.length} Units Remaining
-              </div>
-            </div>
-
-            <div className="flex-1 flex items-center justify-center flex-wrap gap-4">
-              <AnimatePresence mode="popLayout">
-                {state?.sequence.map((num, idx) => {
-                  const isEdge = idx === 0 || idx === state.sequence.length - 1;
-                  return (
-                    <motion.div
-                      key={`${idx}-${num}`}
-                      layout
-                      initial={{ scale: 0.8, opacity: 0, y: 20 }}
-                      animate={{ scale: 1, opacity: 1, y: 0 }}
-                      exit={{ scale: 0.5, opacity: 0, y: -20 }}
-                      className={`w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-mono font-bold border-2 transition-colors ${
-                        isEdge 
-                          ? 'bg-emerald-500/10 border-emerald-500 text-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.1)]' 
-                          : 'bg-zinc-800/50 border-white/5 text-zinc-400'
-                      }`}
-                    >
-                      {num}
-                    </motion.div>
-                  );
-                })}
-                {state?.sequence.length === 0 && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-center space-y-2"
-                  >
-                    <div className="text-emerald-500 font-bold text-xl">SEQUENCE COMPLETED</div>
-                    <p className="text-zinc-500 text-sm">Rotating strategy and resetting sequence...</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            <div className="mt-8 pt-6 border-t border-white/5 flex items-center justify-between text-xs text-zinc-500">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>Next Bet Components</span>
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <Bell className="w-4 h-4 text-sky-400" />
+                  <span className="text-xs font-bold text-sky-400 uppercase tracking-widest">Telegram Notifications</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-zinc-700" />
-                  <span>Inactive Units</span>
+                <div className="space-y-3">
+                  <input 
+                    placeholder="Bot Token"
+                    type="password"
+                    value={config.tgToken}
+                    onChange={(e) => setConfig({...config, tgToken: e.target.value})}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                  />
+                  <input 
+                    placeholder="Chat ID"
+                    value={config.tgChat}
+                    onChange={(e) => setConfig({...config, tgChat: e.target.value})}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                  />
                 </div>
               </div>
-              <div className="font-mono">
-                Next Bet: <span className="text-zinc-100 font-bold">
-                  {state?.sequence.length === 0 
-                    ? state.initialSequence[0] + state.initialSequence[state.initialSequence.length - 1]
-                    : state?.sequence.length === 1 
-                      ? state.sequence[0] 
-                      : (state?.sequence[0] || 0) + (state?.sequence[state?.sequence.length - 1] || 0)
-                  } Units
-                </span>
-              </div>
-            </div>
-          </section>
 
-          {/* Roll History */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-                <History className="w-4 h-4" />
-                Roll History
-              </h2>
-              <span className="text-[10px] text-zinc-500 font-mono">LAST 20</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {state?.history.map((roll, i) => {
-                const isRed = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(roll);
-                const isZero = roll === 0;
-                return (
-                  <div 
-                    key={i}
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold border ${
-                      isZero ? 'bg-emerald-500 border-emerald-400 text-black' :
-                      isRed ? 'bg-rose-500/20 border-rose-500/40 text-rose-500' : 
-                      'bg-zinc-800 border-white/10 text-zinc-400'
-                    }`}
-                  >
-                    {roll}
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <Brain className="w-4 h-4 text-purple-400" />
+                  <span className="text-xs font-bold text-purple-400 uppercase tracking-widest">AI Intelligence</span>
+                </div>
+                <label className="flex items-center gap-3 cursor-pointer group p-3 bg-purple-50 dark:bg-purple-500/5 rounded-xl border border-purple-200 dark:border-purple-500/20">
+                  <input 
+                    type="checkbox" 
+                    checked={config.aiMode}
+                    onChange={(e) => setConfig({...config, aiMode: e.target.checked})}
+                    className="w-4 h-4 rounded border-purple-300 dark:border-purple-700 bg-white dark:bg-slate-900 text-purple-600 focus:ring-purple-500"
+                  />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-bold text-purple-600 dark:text-purple-400">AI Smart Switch</span>
+                    <span className="text-[10px] text-slate-500 leading-tight">Continuously analyzes all strategies and swaps to the most profitable one after each lock.</span>
                   </div>
-                );
-              })}
-              {state?.history.length === 0 && (
-                <div className="text-xs text-zinc-600 italic py-4">No rolls recorded yet...</div>
-              )}
-            </div>
-          </section>
-
-          {/* Profit Graph */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-                <ChartIcon className="w-4 h-4" />
-                Profit Trajectory
-              </h2>
-              <div className="flex items-center gap-2">
-                <span className={`text-sm font-mono font-bold ${
-                  (state?.totalProfit || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
-                }`}>
-                  {(state?.totalProfit || 0) > 0 ? '+' : ''}{(state?.totalProfit || 0).toFixed(8)} Units
-                </span>
+                </label>
               </div>
-            </div>
-            <div className="h-[200px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={state?.profitHistory || []}>
-                  <defs>
-                    <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                    </linearGradient>
-                    <linearGradient id="colorLoss" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                  <XAxis 
-                    dataKey="time" 
-                    hide 
-                  />
-                  <YAxis 
-                    hide 
-                    domain={['auto', 'auto']}
-                  />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#18181b', border: '1px solid #333', borderRadius: '8px' }}
-                    itemStyle={{ color: '#fff', fontSize: '12px', fontFamily: 'monospace' }}
-                    labelStyle={{ display: 'none' }}
-                    formatter={(value: number) => [`${value.toFixed(8)} Units`, 'Profit']}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="profit" 
-                    stroke={(state?.totalProfit || 0) >= 0 ? "#10b981" : "#f43f5e"} 
-                    fillOpacity={1} 
-                    fill={(state?.totalProfit || 0) >= 0 ? "url(#colorProfit)" : "url(#colorLoss)"} 
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
 
-          {/* Recent Bets Table */}
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-            <h2 className="text-sm font-medium text-zinc-400 flex items-center gap-2">
-              <Activity className="w-4 h-4" />
-              Recent Activity
-            </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-zinc-500 border-b border-white/5">
-                    <th className="pb-3 font-bold uppercase tracking-widest">Time</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Roll</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Target</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Amount</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Units</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Mult</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Profit</th>
-                    <th className="pb-3 font-bold uppercase tracking-widest">Result</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {state?.recentBets.map((bet, i) => (
-                    <tr key={i} className="group">
-                      <td className="py-3 font-mono text-zinc-500">{bet.timestamp || '-'}</td>
-                      <td className="py-3 font-mono text-zinc-300">
-                        <div className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold ${
-                          bet.roll === 0 ? 'bg-emerald-500 text-black' :
-                          [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(bet.roll || -1) 
-                            ? 'bg-rose-500/20 text-rose-500' : 'bg-zinc-800 text-zinc-400'
-                        }`}>
-                          {bet.roll !== undefined ? bet.roll : '-'}
-                        </div>
-                      </td>
-                      <td className="py-3 font-mono uppercase text-zinc-300">{bet.target}</td>
-                      <td className="py-3 font-mono text-zinc-400">{bet.amount.toFixed(8)}</td>
-                      <td className="py-3 font-mono text-zinc-500">{bet.unitSize || '-'}</td>
-                      <td className="py-3 font-mono text-zinc-500">{bet.multiplier ? `${bet.multiplier}x` : '-'}</td>
-                      <td className={`py-3 font-mono font-bold ${bet.win ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {bet.win ? `+${(bet.payout - bet.amount).toFixed(8)}` : `-${bet.amount.toFixed(8)}`}
-                      </td>
-                      <td className="py-3">
-                        <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          bet.win ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
-                        }`}>
-                          {bet.win ? 'WIN' : 'LOSS'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {state?.recentBets.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="py-8 text-center text-zinc-600 italic">
-                        No activity recorded...
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          {/* AI Strategy & Rotation Log */}
-          <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-                  <Brain className="w-5 h-5 text-emerald-500" />
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <TrendingUp className="w-4 h-4 text-indigo-400" />
+                  <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Active Rotation</span>
                 </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-tight">AI Strategy Engine</h3>
-                  <div className="flex items-center gap-2">
-                    <p className="text-[10px] text-emerald-500/60 font-mono uppercase">Active Analysis</p>
-                  </div>
-                </div>
-                {state?.strategyHistory[0]?.confidence && (
-                  <div className="flex flex-col items-end">
-                    <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Confidence</span>
-                    <span className="text-sm font-mono font-bold text-emerald-400">{state.strategyHistory[0].confidence}%</span>
-                  </div>
-                )}
-              </div>
-              <div className="bg-black/40 rounded-xl p-4 border border-white/5 space-y-4">
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Zap className="w-3 h-3 text-indigo-400" />
-                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Reasoning</span>
-                  </div>
-                  <p className="text-xs text-zinc-300 leading-relaxed">
-                    {state?.aiAnalysis}
-                  </p>
-                </div>
-                {state?.strategyHistory[0]?.anomaly && state.strategyHistory[0].anomaly !== "None" && state.strategyHistory[0].anomaly !== "None detected" && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <ShieldAlert className="w-3 h-3 text-amber-500" />
-                      <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Anomaly Detected</p>
-                    </div>
-                    <p className="text-[10px] text-amber-200/80 font-mono leading-relaxed">
-                      {state.strategyHistory[0].anomaly}
-                    </p>
-                  </div>
-                )}
-                {state?.strategyHistory[0] && (
-                  <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/5">
-                    <div className="space-y-1">
-                      <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Variance</p>
-                      <p className={`text-xs font-mono font-bold ${
-                        state.strategyHistory[0].variance?.toLowerCase() === 'high' ? 'text-rose-500' :
-                        state.strategyHistory[0].variance?.toLowerCase() === 'low' ? 'text-emerald-500' :
-                        'text-amber-500'
-                      }`}>{state.strategyHistory[0].variance || 'Medium'}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Risk Score</p>
-                      <p className="text-xs font-mono font-bold text-indigo-400">{state.strategyHistory[0].riskScore || 50}/100</p>
-                    </div>
-                    <div className="space-y-1 col-span-2">
-                      <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Bet Multiplier</p>
-                      <p className="text-xs font-mono font-bold text-zinc-300">
-                        {state.currentMultiplier ? state.currentMultiplier.toFixed(2) : '1.00'}x
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="lg:col-span-2 bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <History className="w-4 h-4 text-zinc-500" />
-                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">AI Rotation History</h3>
-                </div>
-                <span className="text-[10px] text-zinc-600 font-mono">LAST 10 ROTATIONS</span>
-              </div>
-              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-zinc-800">
-                {state?.strategyHistory.map((log, i) => (
-                  <div key={i} className="flex flex-col gap-2 text-[11px] border-b border-white/5 pb-3 mb-3 last:border-0 last:mb-0 last:pb-0">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-zinc-600 font-mono text-[10px]">{log.timestamp}</span>
-                        {log.riskLevel && (
-                          <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${
-                            log.riskLevel.toLowerCase() === 'low' ? 'bg-emerald-500/10 text-emerald-500' :
-                            log.riskLevel.toLowerCase() === 'high' ? 'bg-rose-500/10 text-rose-500' :
-                            'bg-amber-500/10 text-amber-500'
-                          }`}>
-                            {log.riskLevel} RISK
-                          </span>
-                        )}
-                        {log.confidence && (
-                          <span className="text-[9px] font-bold uppercase tracking-widest text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                            {log.confidence}% CONF
-                          </span>
-                        )}
-                        {log.betMultiplier && log.betMultiplier !== 1 && (
-                           <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded">
-                             {log.betMultiplier.toFixed(2)}x BET
-                           </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 bg-zinc-800/50 px-2 py-1 rounded border border-white/5">
-                        <span className="text-emerald-500 font-bold uppercase">{log.type}</span>
-                        <span className="text-zinc-600">→</span>
-                        <span className="text-zinc-100 font-mono uppercase">{log.target}</span>
-                      </div>
-                    </div>
-                    
-                    {(log.trigger || (log.anomaly && log.anomaly !== 'None detected')) && (
-                      <div className="grid grid-cols-1 gap-1">
-                        {log.trigger && (
-                          <div className="flex items-start gap-2">
-                            <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider shrink-0 mt-0.5 w-14">TRIGGER</span>
-                            <span className="text-zinc-400">{log.trigger}</span>
+                  {[
+                    { id: 'playA', strat: 'A', label: 'A: Tucty / Řady (Smart AI)' },
+                    { id: 'playB', strat: 'B', label: 'B: Loterie 8 čísel (x2 Loss)' },
+                    { id: 'playC', strat: 'C', label: 'C: Barvy/Ostatní (Smart AI)' },
+                    { id: 'playD', strat: 'D', label: 'D: 3x Šestice (Smart AI)' },
+                    { id: 'playE', strat: 'E', label: 'E: 8x Dvojice (Smart AI)', color: 'text-amber-400' },
+                    { id: 'playF', strat: 'F', label: 'F: 4x Čtveřice (Smart AI)', color: 'text-amber-400' },
+                    { id: 'playG', strat: 'G', label: 'G: AI Loterie (6+0)', color: 'text-emerald-400' },
+                  ].map(strat => {
+                    const weight = status.aiWeights?.[strat.strat] || 1.0;
+                    const weightColor = weight > 1.2 ? 'text-emerald-400' : weight < 0.8 ? 'text-rose-400' : 'text-slate-500';
+                    return (
+                      <label key={strat.id} className="flex items-center justify-between cursor-pointer group">
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            checked={(config as any)[strat.id]}
+                            onChange={(e) => setConfig({...config, [strat.id]: e.target.checked})}
+                            className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className={`text-sm ${strat.color || 'text-slate-700 dark:text-slate-300'} group-hover:text-slate-900 dark:group-hover:text-white transition-colors`}>{strat.label}</span>
+                        </div>
+                        {config.aiMode && (
+                          <div className="flex items-center gap-1.5" title="Gemini AI Weight">
+                            <Brain className={`w-3 h-3 ${weightColor}`} />
+                            <span className={`text-[10px] font-mono font-bold ${weightColor}`}>
+                              {weight.toFixed(2)}x
+                            </span>
                           </div>
                         )}
-                        {log.anomaly && log.anomaly !== 'None detected' && (
-                          <div className="flex items-start gap-2">
-                            <span className="text-[9px] font-bold text-rose-500 uppercase tracking-wider shrink-0 mt-0.5 w-14">ANOMALY</span>
-                            <span className="text-zinc-400">{log.anomaly}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
 
-                    <div className="bg-black/20 p-2 rounded border border-white/5">
-                      <p className="text-zinc-500 italic leading-relaxed">{log.reasoning}</p>
-                    </div>
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                {['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(s => (
+                  <div key={s} className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Bet {s}</label>
+                    <input 
+                      type="text" 
+                      value={(config as any)[`bet${s}`]}
+                      onChange={(e) => setConfig({...config, [`bet${s}`]: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1.5 text-xs outline-none font-mono text-slate-900 dark:text-slate-200"
+                    />
                   </div>
                 ))}
-                {state?.strategyHistory.length === 0 && (
-                  <div className="text-xs text-zinc-600 italic py-8 text-center">
-                    Waiting for first profit lock to trigger rotation...
+              </div>
+
+              <div className="pt-2 space-y-4">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-widest">Risk & Rescue</span>
+                </div>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Base Limit (Units)</label>
+                    <input 
+                      type="text" 
+                      value={config.rescueLimit}
+                      onChange={(e) => setConfig({...config, rescueLimit: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                    />
                   </div>
-                )}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Stop Loss</label>
+                    <input 
+                      type="text" 
+                      value={config.stopLoss}
+                      onChange={(e) => setConfig({...config, stopLoss: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Take Profit</label>
+                    <input 
+                      type="text" 
+                      value={config.takeProfit}
+                      onChange={(e) => setConfig({...config, takeProfit: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                    />
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Risk Tolerance</label>
+                    <select 
+                      value={config.riskTolerance}
+                      onChange={(e) => setConfig({...config, riskTolerance: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none text-slate-900 dark:text-slate-200"
+                    >
+                      <option value="LOW">Low (Safe & Steady)</option>
+                      <option value="MEDIUM">Medium (Balanced)</option>
+                      <option value="HIGH">High (Aggressive Yield)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
-          </section>
 
-          {/* Logic Info */}
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-indigo-500" />
-              </div>
-              <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-tight">Labouchere Logic</h3>
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Bets the sum of the first and last numbers. Wins remove them; losses add the bet amount to the end.
-              </p>
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-200 dark:border-slate-800 space-y-2 transition-colors duration-200">
+              <button 
+                onClick={handleStart}
+                disabled={running}
+                className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+                  running 
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
+                    : 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-900/20 active:scale-[0.98]'
+                }`}
+              >
+                <Play className="w-4 h-4 fill-current" />
+                START BOT
+              </button>
+              <button 
+                onClick={handleStop}
+                disabled={!running}
+                className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+                  !running 
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
+                    : 'bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-900/20 active:scale-[0.98]'
+                }`}
+              >
+                <Square className="w-4 h-4 fill-current" />
+                STOP BOT
+              </button>
             </div>
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-                <Activity className="w-5 h-5 text-amber-500" />
-              </div>
-              <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-tight">AI Rotation</h3>
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Automatically switches between all bet types (1:1 to 35:1) after every successful progression based on AI scanning.
-              </p>
-            </div>
-            <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-                <Coins className="w-5 h-5 text-emerald-500" />
-              </div>
-              <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-tight">Profit Target</h3>
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Each completed sequence nets a profit equal to the sum of the initial sequence (1+2+3 = 6 units).
-              </p>
-            </div>
-          </section>
+          </div>
         </div>
-      </main>
 
-      {/* Footer */}
-      <footer className="max-w-7xl mx-auto px-6 py-12 border-t border-white/5">
-        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="text-xs text-zinc-600 font-mono">
-            &copy; 2024 PARADICE AUTOMATION SYSTEM // V1.0.4
+        {/* Main Content - Stats & Logs */}
+        <div className="lg:col-span-9 space-y-6">
+          
+          {/* Top Stats Bar */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white dark:bg-[#1e293b] p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg flex items-center gap-4 transition-colors duration-200">
+              <div className="w-12 h-12 rounded-xl bg-indigo-100 dark:bg-indigo-500/10 flex items-center justify-center">
+                <Wallet className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Balance</p>
+                <p className="text-xl font-mono font-bold text-slate-900 dark:text-white">{status.balance.toFixed(8)} <span className="text-xs text-slate-500 dark:text-slate-400">{config.currency}</span></p>
+              </div>
+            </div>
+            
+            <div className={`bg-white dark:bg-[#1e293b] p-5 rounded-2xl border ${status.profit >= 0 ? 'border-emerald-200 dark:border-emerald-500/20' : 'border-rose-200 dark:border-rose-500/20'} shadow-lg flex items-center gap-4 transition-colors duration-200`}>
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${status.profit >= 0 ? 'bg-emerald-100 dark:bg-emerald-500/10' : 'bg-rose-100 dark:bg-rose-500/10'}`}>
+                <TrendingUp className={`w-6 h-6 ${status.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`} />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Session Profit</p>
+                <p className={`text-xl font-mono font-bold ${status.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {status.profit >= 0 ? '+' : ''}{status.profit.toFixed(8)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-[#1e293b] p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg flex items-center gap-4 transition-colors duration-200">
+              <div className="w-12 h-12 rounded-xl bg-amber-100 dark:bg-amber-500/10 flex items-center justify-center">
+                <Brain className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">AI Strategy</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xl font-bold text-slate-900 dark:text-white">{status.activeStrat}</p>
+                  <span className="text-[10px] bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-slate-500 dark:text-slate-400 font-mono">MEM: {status.historyCount}/500</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-[#1e293b] p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg flex items-center gap-4 transition-colors duration-200">
+              <div className="w-12 h-12 rounded-xl bg-sky-100 dark:bg-sky-500/10 flex items-center justify-center">
+                <BarChart3 className="w-6 h-6 text-sky-600 dark:text-sky-400" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Win Rate</p>
+                <p className="text-xl font-bold text-slate-900 dark:text-white">{status.stats?.winRate || '0.00'}%</p>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-6 text-xs font-bold text-zinc-500 uppercase tracking-widest">
-            <a href="#" className="hover:text-emerald-500 transition-colors">Documentation</a>
-            <a href="#" className="hover:text-emerald-500 transition-colors">API Status</a>
-            <a href="#" className="hover:text-emerald-500 transition-colors">Support</a>
+
+          {/* Technical Stats Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            {[
+              { label: 'Market Phase', value: status.marketPhase || 'ACCUMULATION', icon: Activity, color: 'text-blue-500 dark:text-blue-400' },
+              { label: 'Current Streak', value: status.stats?.currentStreak || 0, icon: TrendingUp, color: (status.stats?.currentStreak || 0) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400' },
+              { label: 'AI Confidence', value: `${status.aiConfidence || 0}%`, icon: Brain, color: 'text-indigo-500 dark:text-indigo-400' },
+              { label: 'Sector Bias', value: status.aiSectorBias || 'NONE', icon: Target, color: 'text-amber-500 dark:text-amber-400' },
+              { label: 'Max Drawdown', value: status.stats?.maxDrawdown || '0.00000000', icon: ShieldAlert, color: 'text-rose-600 dark:text-rose-400' },
+              { label: 'Volatility', value: `${((status.marketVolatility || 0) * 100).toFixed(1)}%`, icon: Activity, color: 'text-purple-500 dark:text-purple-400' },
+            ].map((stat, i) => (
+              <div key={i} className="bg-white dark:bg-[#1e293b]/50 p-4 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-1 transition-colors duration-200">
+                <div className="flex items-center gap-2">
+                  <stat.icon className={`w-3 h-3 ${stat.color}`} />
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{stat.label}</span>
+                </div>
+                <span className={`text-sm font-mono font-bold ${stat.color}`}>{stat.value}</span>
+              </div>
+            ))}
           </div>
+
+          {/* Chart Section */}
+          <ProfitChart 
+            chartData={status.chartData} 
+            isDarkMode={isDarkMode} 
+            running={running} 
+            showSMA={showSMA} 
+            setShowSMA={setShowSMA} 
+          />
+
+          {/* Bet History Section */}
+          <BetHistoryTable betHistory={status.betHistory || []} />
+
+          {/* Logs Section */}
+          <LiveConsole logs={logs} />
+
         </div>
-      </footer>
+      </div>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #334155;
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #475569;
+        }
+      `}} />
     </div>
   );
 }
